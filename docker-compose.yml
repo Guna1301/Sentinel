@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: postgres:18
+    container_name: sentinel-postgres
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_USER: sentinel
+      POSTGRES_PASSWORD: GunaDB123
+      POSTGRES_DB: sentinel
+
+    ports:
+      - "5434:5432"
+
+    volumes:
+      - sentinel_postgres_data:/var/lib/postgresql
+
+volumes:
+  sentinel_postgres_data:
