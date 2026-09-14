@@ -4,11 +4,11 @@ services:
     container_name: sentinel-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_DB: sentinel
-      POSTGRES_USER: sentinel
-      POSTGRES_PASSWORD: GunaDB123
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     ports:
-      - "5434:5432"
+      - "${POSTGRES_PORT}:5432"
     volumes:
       - sentinel_postgres_data:/var/lib/postgresql
 
@@ -20,6 +20,30 @@ services:
       - "6379:6379"
     volumes:
       - sentinel_redis_data:/data
+
+  api:
+    build:
+      context: ./backend
+    container_name: sentinel-api
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379
+    ports:
+      - "${API_PORT}:8000"
+    depends_on:
+      - postgres
+      - redis
+
+  worker:
+    build:
+      context: ./worker
+    container_name: sentinel-worker
+    restart: unless-stopped
+    environment:
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      - redis
 
 volumes:
   sentinel_postgres_data:
