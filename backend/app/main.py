@@ -1,3 +1,5 @@
+import os
+
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -26,4 +28,5 @@ async def health_check():
     return {
         "status": "ok",
         "service": "sentinel-api",
+        "instance": os.getenv("HOSTNAME", "unknown"),
     }
