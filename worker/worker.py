@@ -1,8 +1,10 @@
-from arq import create_pool
-from arq.connections import RedisSettings
 import os
 
+from arq.connections import RedisSettings
 from dotenv import load_dotenv
+
+from jobs.example import example_job
+
 
 load_dotenv()
 
@@ -17,14 +19,8 @@ async def shutdown(ctx):
     print("Sentinel worker stopped")
 
 
-async def example_job(ctx):
-    print("Example job executed")
-
-
 class WorkerSettings:
     functions = [example_job]
-
     on_startup = startup
     on_shutdown = shutdown
-
     redis_settings = RedisSettings.from_dsn(REDIS_URL)

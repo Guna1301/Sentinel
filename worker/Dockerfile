@@ -12,5 +12,6 @@ RUN pip install --no-cache-dir --upgrade pip setuptools msgpack \
     && pip install --no-cache-dir -r requirements.txt
 
 COPY worker.py .
+COPY jobs ./jobs
 
 CMD ["arq", "worker.WorkerSettings"]
