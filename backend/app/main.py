@@ -4,16 +4,18 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.core.queue import create_redis_pool
+from app.core.queue import QueueClient, create_redis_pool
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    app.state.arq_pool = await create_redis_pool()
+    arq_pool = await create_redis_pool()
+
+    app.state.queue = QueueClient(arq_pool)
 
     yield
 
-    await app.state.arq_pool.close()
+    await arq_pool.close()
 
 
 app = FastAPI(
