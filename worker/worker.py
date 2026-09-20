@@ -4,6 +4,7 @@ from arq.connections import RedisSettings
 from dotenv import load_dotenv
 
 from jobs.example import example_job
+from jobs.failure import slow_job, always_fail_job, retry_job
 
 
 load_dotenv()
@@ -20,7 +21,13 @@ async def shutdown(ctx):
 
 
 class WorkerSettings:
-    functions = [example_job]
+    functions = [example_job, slow_job, always_fail_job, retry_job]
+
     on_startup = startup
     on_shutdown = shutdown
+
     redis_settings = RedisSettings.from_dsn(REDIS_URL)
+
+    job_timeout = 30
+    max_tries = 3
+    retry_jobs = True
