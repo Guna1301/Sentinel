@@ -13,7 +13,7 @@ DATABASE_URL = os.environ["DATABASE_URL"]
 
 engine = create_async_engine(
     DATABASE_URL,
-    echo=True, 
+    echo=False, 
 )
 
 AsyncSessionLocal = async_sessionmaker(
