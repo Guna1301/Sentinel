@@ -235,3 +235,29 @@ async def test_delete_project(app_client, authenticated_user):
         )
 
         assert result.scalar_one_or_none() is None
+
+@pytest.mark.asyncio
+async def test_update_project_rejects_null_name(
+    app_client,
+    authenticated_user,
+):
+    async with AsyncSessionLocal() as session:
+        project = Project(
+            owner_id=authenticated_user.id,
+            name="Original Name",
+        )
+
+        session.add(project)
+        await session.commit()
+        await session.refresh(project)
+
+        project_id = project.id
+
+    response = await app_client.patch(
+        f"/api/projects/{project_id}",
+        json={
+            "name": None,
+        },
+    )
+
+    assert response.status_code == 422
