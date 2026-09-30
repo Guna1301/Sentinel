@@ -36,14 +36,12 @@ class ProjectService:
     async def update_project(
         self,
         project: Project,
-        name: str | None,
-        description: str | None,
+        **updates
     ) -> Project:
-        if name is not None:
-            project.name = name
-
-        if description is not None:
-            project.description = description
+        if "name" in updates:
+            project.name = updates["name"]
+        if "description" in updates:
+            project.description = updates["description"]
 
         return project
 

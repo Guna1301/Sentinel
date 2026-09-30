@@ -178,6 +178,36 @@ async def test_update_project(app_client, authenticated_user):
     assert response.status_code == 200
     assert response.json()["name"] == "New Name"
 
+@pytest.mark.asyncio
+async def test_update_project_can_clear_description(
+    app_client,
+    authenticated_user,
+):
+    async with AsyncSessionLocal() as session:
+        project = Project(
+            owner_id=authenticated_user.id,
+            name="Project With Description",
+            description="Description to clear",
+        )
+
+        session.add(project)
+        await session.commit()
+        await session.refresh(project)
+
+        project_id = project.id
+
+    response = await app_client.patch(
+        f"/api/projects/{project_id}",
+        json={
+            "description": None,
+        },
+    )
+
+    assert response.status_code == 200
+
+    data = response.json()
+
+    assert data["description"] is None
 
 @pytest.mark.asyncio
 async def test_delete_project(app_client, authenticated_user):

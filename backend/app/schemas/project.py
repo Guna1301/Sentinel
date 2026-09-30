@@ -11,7 +11,10 @@ class ProjectCreate(BaseModel):
 
 class ProjectUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
-    description: str | None = None
+    description: str | None = Field(default=None)
+
+    def model_dump_updates(self) -> dict:
+        return self.model_dump(exclude_unset=True)
 
 
 class ProjectResponse(BaseModel):

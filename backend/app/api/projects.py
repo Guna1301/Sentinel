@@ -101,7 +101,9 @@ async def update_project(
             detail="Project not found",
         )
 
-    if payload.name is None and payload.description is None:
+    updates = payload.model_dump_updates()
+
+    if not updates:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="At least one field must be provided",
@@ -109,8 +111,7 @@ async def update_project(
 
     project = await service.update_project(
         project=project,
-        name=payload.name,
-        description=payload.description,
+        **updates,
     )
 
     await session.commit()
