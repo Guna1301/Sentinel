@@ -51,3 +51,10 @@ class Service(Base):
         "Project",
         back_populates="services",
     )
+
+    monitoring_config = relationship(
+        "MonitoringConfig",
+        back_populates="service",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )

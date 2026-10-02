@@ -11,6 +11,7 @@ from app.core.queue import QueueClient, create_redis_pool
 from app.api.auth import router as auth_router
 from app.api.projects import router as projects_router
 from app.api.services import router as services_router
+from app.api.monitoring_config import router as monitoring_config_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -36,6 +37,7 @@ app = FastAPI(
 app.include_router(auth_router)
 app.include_router(projects_router)
 app.include_router(services_router)
+app.include_router(monitoring_config_router)
 
 @app.get("/health")
 async def health_check():

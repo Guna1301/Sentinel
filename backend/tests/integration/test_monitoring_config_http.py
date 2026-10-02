@@ -1,0 +1,667 @@
+import uuid
+
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
+
+from app.api.dependencies import get_current_user
+from app.core.database import AsyncSessionLocal
+from app.main import app
+from app.models.monitoring_config import MonitoringConfig
+from app.models.project import Project
+from app.models.service import Service
+from app.models.user import User
+
+
+@pytest_asyncio.fixture
+async def client():
+    transport = ASGITransport(app=app)
+
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+    ) as client:
+        yield client
+
+
+@pytest_asyncio.fixture
+async def authenticated_user():
+    async with AsyncSessionLocal() as session:
+        user = User(
+            google_subject=f"monitoring-test-{uuid.uuid4()}",
+            email=f"monitoring-{uuid.uuid4()}@example.com",
+            name="Monitoring Test User",
+        )
+        session.add(user)
+        await session.commit()
+        await session.refresh(user)
+
+        app.dependency_overrides[get_current_user] = lambda: user
+
+        yield user
+
+        app.dependency_overrides.pop(get_current_user, None)
+
+
+@pytest_asyncio.fixture
+async def other_user():
+    async with AsyncSessionLocal() as session:
+        user = User(
+            google_subject=f"monitoring-other-{uuid.uuid4()}",
+            email=f"monitoring-other-{uuid.uuid4()}@example.com",
+            name="Other Monitoring User",
+        )
+        session.add(user)
+        await session.commit()
+        await session.refresh(user)
+
+        yield user
+
+
+@pytest_asyncio.fixture
+async def project(authenticated_user):
+    async with AsyncSessionLocal() as session:
+        project = Project(
+            owner_id=authenticated_user.id,
+            name=f"Monitoring Project {uuid.uuid4()}",
+            description="Monitoring test project",
+        )
+        session.add(project)
+        await session.commit()
+        await session.refresh(project)
+
+        return project
+
+
+@pytest_asyncio.fixture
+async def service(project):
+    async with AsyncSessionLocal() as session:
+        service = Service(
+            project_id=project.id,
+            name=f"Monitoring Service {uuid.uuid4()}",
+            description="Monitoring test service",
+        )
+        session.add(service)
+        await session.commit()
+        await session.refresh(service)
+
+        return service
+
+
+@pytest_asyncio.fixture
+async def other_user_project(other_user):
+    async with AsyncSessionLocal() as session:
+        project = Project(
+            owner_id=other_user.id,
+            name=f"Other Project {uuid.uuid4()}",
+            description="Other user's project",
+        )
+        session.add(project)
+        await session.commit()
+        await session.refresh(project)
+
+        return project
+
+
+@pytest_asyncio.fixture
+async def other_user_service(other_user_project):
+    async with AsyncSessionLocal() as session:
+        service = Service(
+            project_id=other_user_project.id,
+            name=f"Other Service {uuid.uuid4()}",
+            description="Other user's service",
+        )
+        session.add(service)
+        await session.commit()
+        await session.refresh(service)
+
+        return service
+
+
+async def create_monitoring_config(
+    client: AsyncClient,
+    project_id,
+    service_id,
+    **overrides,
+):
+    payload = {
+        "url": "https://example.com/health",
+        "method": "GET",
+        "interval_seconds": 60,
+        "timeout_seconds": 10,
+        "enabled": True,
+    }
+
+    payload.update(overrides)
+
+    return await client.post(
+        f"/api/projects/{project_id}/services/{service_id}/monitoring",
+        json=payload,
+    )
+
+
+@pytest.mark.asyncio
+async def test_create_monitoring_config(
+    client,
+    authenticated_user,
+    project,
+    service,
+):
+    response = await create_monitoring_config(
+        client,
+        project.id,
+        service.id,
+    )
+
+    assert response.status_code == 201
+
+    data = response.json()
+
+    assert data["service_id"] == str(service.id)
+    assert data["url"] == "https://example.com/health"
+    assert data["method"] == "GET"
+    assert data["interval_seconds"] == 60
+    assert data["timeout_seconds"] == 10
+    assert data["enabled"] is True
+
+
+@pytest.mark.asyncio
+async def test_create_monitoring_config_with_custom_values(
+    client,
+    authenticated_user,
+    project,
+    service,
+):
+    response = await create_monitoring_config(
+        client,
+        project.id,
+        service.id,
+        url="https://api.example.com/status",
+        method="post",
+        interval_seconds=120,
+        timeout_seconds=30,
+        enabled=False,
+    )
+
+    assert response.status_code == 201
+
+    data = response.json()
+
+    assert data["url"] == "https://api.example.com/status"
+    assert data["method"] == "POST"
+    assert data["interval_seconds"] == 120
+    assert data["timeout_seconds"] == 30
+    assert data["enabled"] is False
+
+
+@pytest.mark.asyncio
+async def test_get_monitoring_config(
+    client,
+    authenticated_user,
+    project,
+    service,
+):
+    create_response = await create_monitoring_config(
+        client,
+        project.id,
+        service.id,
+    )
+
+    assert create_response.status_code == 201
+
+    response = await client.get(
+        f"/api/projects/{project.id}/services/{service.id}/monitoring"
+    )
+
+    assert response.status_code == 200
+
+    data = response.json()
+
+    assert data["service_id"] == str(service.id)
+    assert data["method"] == "GET"
+
+
+@pytest.mark.asyncio
+async def test_get_missing_monitoring_config_returns_404(
+    client,
+    authenticated_user,
+    project,
+    service,
+):
+    response = await client.get(
+        f"/api/projects/{project.id}/services/{service.id}/monitoring"
+    )
+
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_duplicate_monitoring_config_returns_409(
+    client,
+    authenticated_user,
+    project,
+    service,
+):
+    first = await create_monitoring_config(
+        client,
+        project.id,
+        service.id,
+    )
+
+    assert first.status_code == 201
+
+    second = await create_monitoring_config(
+        client,
+        project.id,
+        service.id,
+    )
+
+    assert second.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_create_for_missing_service_returns_404(
+    client,
+    authenticated_user,
+    project,
+):
+    response = await create_monitoring_config(
+        client,
+        project.id,
+        uuid.uuid4(),
+    )
+
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_other_users_service_returns_404(
+    client,
+    authenticated_user,
+    project,
+    other_user_service,
+):
+    response = await create_monitoring_config(
+        client,
+        project.id,
+        other_user_service.id,
+    )
+
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_wrong_project_for_service_returns_404(
+    client,
+    authenticated_user,
+    project,
+    service,
+    other_user_project,
+):
+    response = await create_monitoring_config(
+        client,
+        other_user_project.id,
+        service.id,
+    )
+
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_update_url(
+    client,
+    authenticated_user,
+    project,
+    service,
+):
+    await create_monitoring_config(
+        client,
+        project.id,
+        service.id,
+    )
+
+    response = await client.patch(
+        f"/api/projects/{project.id}/services/{service.id}/monitoring",
+        json={
+            "url": "https://example.com/new-health",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["url"] == "https://example.com/new-health"
+
+
+@pytest.mark.asyncio
+async def test_update_method_normalizes_to_uppercase(
+    client,
+    authenticated_user,
+    project,
+    service,
+):
+    await create_monitoring_config(
+        client,
+        project.id,
+        service.id,
+    )
+
+    response = await client.patch(
+        f"/api/projects/{project.id}/services/{service.id}/monitoring",
+        json={
+            "method": "post",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["method"] == "POST"
+
+
+@pytest.mark.asyncio
+async def test_update_interval(
+    client,
+    authenticated_user,
+    project,
+    service,
+):
+    await create_monitoring_config(
+        client,
+        project.id,
+        service.id,
+    )
+
+    response = await client.patch(
+        f"/api/projects/{project.id}/services/{service.id}/monitoring",
+        json={
+            "interval_seconds": 300,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["interval_seconds"] == 300
+
+
+@pytest.mark.asyncio
+async def test_update_timeout(
+    client,
+    authenticated_user,
+    project,
+    service,
+):
+    await create_monitoring_config(
+        client,
+        project.id,
+        service.id,
+    )
+
+    response = await client.patch(
+        f"/api/projects/{project.id}/services/{service.id}/monitoring",
+        json={
+            "timeout_seconds": 30,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["timeout_seconds"] == 30
+
+
+@pytest.mark.asyncio
+async def test_update_enabled(
+    client,
+    authenticated_user,
+    project,
+    service,
+):
+    await create_monitoring_config(
+        client,
+        project.id,
+        service.id,
+    )
+
+    response = await client.patch(
+        f"/api/projects/{project.id}/services/{service.id}/monitoring",
+        json={
+            "enabled": False,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["enabled"] is False
+
+
+@pytest.mark.asyncio
+async def test_update_multiple_fields(
+    client,
+    authenticated_user,
+    project,
+    service,
+):
+    await create_monitoring_config(
+        client,
+        project.id,
+        service.id,
+    )
+
+    response = await client.patch(
+        f"/api/projects/{project.id}/services/{service.id}/monitoring",
+        json={
+            "url": "https://api.example.com/health",
+            "method": "HEAD",
+            "interval_seconds": 180,
+            "timeout_seconds": 20,
+            "enabled": False,
+        },
+    )
+
+    assert response.status_code == 200
+
+    data = response.json()
+
+    assert data["url"] == "https://api.example.com/health"
+    assert data["method"] == "HEAD"
+    assert data["interval_seconds"] == 180
+    assert data["timeout_seconds"] == 20
+    assert data["enabled"] is False
+
+
+@pytest.mark.asyncio
+async def test_empty_patch_returns_400(
+    client,
+    authenticated_user,
+    project,
+    service,
+):
+    await create_monitoring_config(
+        client,
+        project.id,
+        service.id,
+    )
+
+    response = await client.patch(
+        f"/api/projects/{project.id}/services/{service.id}/monitoring",
+        json={},
+    )
+
+    assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_null_method_returns_422(
+    client,
+    authenticated_user,
+    project,
+    service,
+):
+    await create_monitoring_config(
+        client,
+        project.id,
+        service.id,
+    )
+
+    response = await client.patch(
+        f"/api/projects/{project.id}/services/{service.id}/monitoring",
+        json={
+            "method": None,
+        },
+    )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_invalid_method_returns_422(
+    client,
+    authenticated_user,
+    project,
+    service,
+):
+    response = await create_monitoring_config(
+        client,
+        project.id,
+        service.id,
+        method="INVALID",
+    )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_invalid_interval_returns_422(
+    client,
+    authenticated_user,
+    project,
+    service,
+):
+    response = await create_monitoring_config(
+        client,
+        project.id,
+        service.id,
+        interval_seconds=0,
+    )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_invalid_timeout_returns_422(
+    client,
+    authenticated_user,
+    project,
+    service,
+):
+    response = await create_monitoring_config(
+        client,
+        project.id,
+        service.id,
+        timeout_seconds=0,
+    )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_invalid_url_returns_422(
+    client,
+    authenticated_user,
+    project,
+    service,
+):
+    response = await create_monitoring_config(
+        client,
+        project.id,
+        service.id,
+        url="not-a-url",
+    )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_update_missing_monitoring_config_returns_404(
+    client,
+    authenticated_user,
+    project,
+    service,
+):
+    response = await client.patch(
+        f"/api/projects/{project.id}/services/{service.id}/monitoring",
+        json={
+            "enabled": False,
+        },
+    )
+
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_delete_monitoring_config(
+    client,
+    authenticated_user,
+    project,
+    service,
+):
+    create_response = await create_monitoring_config(
+        client,
+        project.id,
+        service.id,
+    )
+
+    assert create_response.status_code == 201
+
+    response = await client.delete(
+        f"/api/projects/{project.id}/services/{service.id}/monitoring"
+    )
+
+    assert response.status_code == 204
+
+    get_response = await client.get(
+        f"/api/projects/{project.id}/services/{service.id}/monitoring"
+    )
+
+    assert get_response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_unauthorized_delete_returns_404(
+    client,
+    authenticated_user,
+    project,
+    other_user_service,
+):
+    response = await client.delete(
+        f"/api/projects/{project.id}/services/{other_user_service.id}/monitoring"
+    )
+
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_service_deletion_cascades_monitoring_config(
+    client,
+    authenticated_user,
+    project,
+    service,
+):
+    create_response = await create_monitoring_config(
+        client,
+        project.id,
+        service.id,
+    )
+
+    assert create_response.status_code == 201
+
+    async with AsyncSessionLocal() as session:
+        db_service = await session.get(Service, service.id)
+
+        assert db_service is not None
+
+        await session.delete(db_service)
+        await session.commit()
+
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(MonitoringConfig).where(
+                MonitoringConfig.service_id == service.id
+            )
+        )
+
+        assert result.scalar_one_or_none() is None
