@@ -68,3 +68,9 @@ class MonitoringConfig(Base):
         "Service",
         back_populates="monitoring_config",
     )
+
+    checks = relationship(
+        "MonitorCheck",
+        back_populates="monitoring_config",
+        cascade="all, delete-orphan",
+    )

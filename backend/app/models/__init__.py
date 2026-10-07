@@ -4,6 +4,8 @@ from app.models.user import User
 from app.models.project import Project
 from app.models.service import Service
 from app.models.monitoring_config import MonitoringConfig
+from app.models.monitor_check import MonitorCheck
+
 
 __all__ = [
     "Base",
@@ -12,4 +14,5 @@ __all__ = [
     "Project",
     "Service",
     "MonitoringConfig",
+    "MonitorCheck",
 ]

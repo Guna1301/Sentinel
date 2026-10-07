@@ -13,5 +13,6 @@ RUN pip install --no-cache-dir --upgrade pip setuptools msgpack \
 
 COPY worker.py .
 COPY jobs ./jobs
+COPY db ./db
 
 CMD ["arq", "worker.WorkerSettings"]
