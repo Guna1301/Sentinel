@@ -15,6 +15,9 @@ from app.models.user import User
 
 from types import SimpleNamespace
 
+from app.core.queue import QueueClient, create_redis_pool
+from app.models.monitor_check import MonitorCheck
+
 @pytest_asyncio.fixture
 async def client():
     transport = ASGITransport(app=app)
@@ -725,6 +728,16 @@ class FakeQueue:
         )
         return SimpleNamespace(job_id="test-job-123")
 
+class CapturingQueue:
+    def __init__(self, delegate):
+        self.delegate = delegate
+        self.jobs = []
+
+    async def enqueue(self, *args, **kwargs):
+        job = await self.delegate.enqueue(*args, **kwargs)
+        self.jobs.append(job)
+        return job
+
 
 @pytest.mark.asyncio
 async def test_run_monitoring_check_for_unauthorized_service_returns_404(
@@ -749,3 +762,97 @@ async def test_run_monitoring_check_for_unauthorized_service_returns_404(
 
     assert response.status_code == 404
     assert queue.calls == []
+
+
+@pytest.mark.asyncio
+async def test_manual_monitoring_check_flows_through_worker_and_persists_results(
+    client,
+    authenticated_user,
+    project,
+    service,
+    monkeypatch,
+):
+    create_response = await create_monitoring_config(
+        client,
+        project.id,
+        service.id,
+        url="http://nginx/health",
+        timeout_seconds=5,
+    )
+    assert create_response.status_code == 201
+
+    config_id = uuid.UUID(create_response.json()["id"])
+
+    monitoring_path = (
+        f"/api/projects/{project.id}/services/"
+        f"{service.id}/monitoring"
+    )
+
+    pool = await create_redis_pool()
+    queue = CapturingQueue(QueueClient(pool))
+
+    monkeypatch.setattr(
+        app.state,
+        "queue",
+        queue,
+        raising=False,
+    )
+
+    try:
+        # First execution: NGINX -> API health endpoint -> HTTP 200.
+        response = await client.post(f"{monitoring_path}/run")
+
+        assert response.status_code == 202
+        assert response.json()["status"] == "queued"
+
+        success_result = await queue.jobs[-1].result(timeout=20)
+
+        assert success_result["status"] == "completed"
+        assert success_result["success"] is True
+
+        # Second execution: a nonexistent path should return HTTP 404.
+        update_response = await client.patch(
+            monitoring_path,
+            json={
+                "url": "http://nginx/__sentinel_e2e_not_found__",
+            },
+        )
+        assert update_response.status_code == 200
+
+        response = await client.post(f"{monitoring_path}/run")
+
+        assert response.status_code == 202
+
+        failure_result = await queue.jobs[-1].result(timeout=20)
+
+        assert failure_result["status"] == "completed"
+        assert failure_result["success"] is False
+
+        # Confirm that both executions were persisted in PostgreSQL.
+        async with AsyncSessionLocal() as session:
+            query = (
+                select(MonitorCheck)
+                .where(
+                    MonitorCheck.monitoring_config_id == config_id
+                )
+                .order_by(MonitorCheck.checked_at.asc())
+            )
+
+            result = await session.execute(query)
+            checks = result.scalars().all()
+
+        assert len(checks) == 2
+
+        assert checks[0].success is True
+        assert checks[0].status_code == 200
+        assert checks[0].latency_ms >= 0
+        assert checks[0].error is None
+
+        assert checks[1].success is False
+        assert checks[1].status_code == 404
+        assert checks[1].latency_ms >= 0
+        assert checks[1].error is None
+
+    finally:
+        await pool.aclose()
+        await client.delete(monitoring_path)
