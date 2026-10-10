@@ -3,3 +3,4 @@ redis==5.3.1
 python-dotenv==1.2.3
 sqlalchemy==2.0.43
 asyncpg==0.31.0
+httpx==0.28.1
