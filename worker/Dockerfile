@@ -1,3 +1,4 @@
+
 FROM python:3.13-slim
 
 WORKDIR /app
@@ -14,5 +15,6 @@ RUN pip install --no-cache-dir --upgrade pip setuptools msgpack \
 COPY worker.py .
 COPY jobs ./jobs
 COPY db ./db
+COPY clients ./clients
 
 CMD ["arq", "worker.WorkerSettings"]
