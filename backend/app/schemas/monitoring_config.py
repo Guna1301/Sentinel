@@ -3,6 +3,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, HttpUrl, field_validator
 
+from typing import Literal
 
 SUPPORTED_METHODS = {
     "GET",
@@ -75,3 +76,7 @@ class MonitoringConfigResponse(BaseModel):
     model_config = {
         "from_attributes": True,
     }
+
+class MonitoringCheckEnqueueResponse(BaseModel):
+    status: Literal["queued"] = "queued"
+    job_id: str

@@ -13,6 +13,7 @@ from app.models.project import Project
 from app.models.service import Service
 from app.models.user import User
 
+from types import SimpleNamespace
 
 @pytest_asyncio.fixture
 async def client():
@@ -665,3 +666,86 @@ async def test_service_deletion_cascades_monitoring_config(
         )
 
         assert result.scalar_one_or_none() is None
+
+
+@pytest.mark.asyncio
+async def test_run_monitoring_check_enqueues_job(
+    client,
+    authenticated_user,
+    project,
+    service,
+    monkeypatch,
+):
+    create_response = await create_monitoring_config(
+        client,
+        project.id,
+        service.id,
+    )
+
+    assert create_response.status_code == 201
+    config_id = create_response.json()["id"]
+
+    queue = FakeQueue()
+    monkeypatch.setattr(
+        app.state,
+        "queue",
+        queue,
+        raising=False,
+    )
+
+    response = await client.post(
+        f"/api/projects/{project.id}/services/{service.id}/monitoring/run"
+    )
+
+    assert response.status_code == 202
+    assert response.json() == {
+        "status": "queued",
+        "job_id": "test-job-123",
+    }
+
+    assert queue.calls == [
+        {
+            "job_name": "check_monitor",
+            "args": (config_id,),
+            "kwargs": {},
+        }
+    ]
+
+class FakeQueue:
+    def __init__(self):
+        self.calls = []
+
+    async def enqueue(self, job_name, *args, **kwargs):
+        self.calls.append(
+            {
+                "job_name": job_name,
+                "args": args,
+                "kwargs": kwargs,
+            }
+        )
+        return SimpleNamespace(job_id="test-job-123")
+
+
+@pytest.mark.asyncio
+async def test_run_monitoring_check_for_unauthorized_service_returns_404(
+    client,
+    authenticated_user,
+    project,
+    other_user_service,
+    monkeypatch,
+):
+    queue = FakeQueue()
+    monkeypatch.setattr(
+        app.state,
+        "queue",
+        queue,
+        raising=False,
+    )
+
+    response = await client.post(
+        f"/api/projects/{project.id}/services/"
+        f"{other_user_service.id}/monitoring/run"
+    )
+
+    assert response.status_code == 404
+    assert queue.calls == []

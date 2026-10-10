@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Response, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import get_current_user, get_db_session
@@ -10,9 +10,11 @@ from app.schemas.monitoring_config import (
     MonitoringConfigCreate,
     MonitoringConfigResponse,
     MonitoringConfigUpdate,
+    MonitoringCheckEnqueueResponse,
 )
 from app.services.monitoring_config import MonitoringConfigService
 
+from redis.exceptions import RedisError
 
 router = APIRouter(
     prefix="/api/projects/{project_id}/services/{service_id}/monitoring",
@@ -102,6 +104,54 @@ async def get_monitoring_config(
 
     return config
 
+
+@router.post(
+    "/run",
+    response_model=MonitoringCheckEnqueueResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def run_monitoring_check(
+    project_id: UUID,
+    service_id: UUID,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+):
+    service = get_monitoring_config_service(session)
+
+    config = await service.get_config(
+        service_id=service_id,
+        project_id=project_id,
+        owner_id=current_user.id,
+    )
+
+    if config is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Monitoring configuration not found",
+        )
+
+    try:
+        job = await request.app.state.queue.enqueue(
+            "check_monitor",
+            str(config.id),
+        )
+    except RedisError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Monitoring queue is unavailable",
+        ) from exc
+
+    if job is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Monitoring check could not be queued",
+        )
+
+    return {
+        "status": "queued",
+        "job_id": job.job_id,
+    }
 
 @router.patch(
     "",
