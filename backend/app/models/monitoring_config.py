@@ -74,3 +74,9 @@ class MonitoringConfig(Base):
         back_populates="monitoring_config",
         cascade="all, delete-orphan",
     )
+
+    next_check_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )

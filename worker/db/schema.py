@@ -33,6 +33,16 @@ monitoring_configs = Table(
         Boolean,
         nullable=False,
     ),
+    Column(
+        "interval_seconds",
+        Integer,
+        nullable=False,
+    ),
+    Column(
+        "next_check_at",
+        DateTime(timezone=True),
+        nullable=False,
+    ),
 )
 
 
