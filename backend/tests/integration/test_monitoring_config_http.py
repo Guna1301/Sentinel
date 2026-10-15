@@ -18,6 +18,8 @@ from types import SimpleNamespace
 from app.core.queue import QueueClient, create_redis_pool
 from app.models.monitor_check import MonitorCheck
 
+from datetime import timedelta
+
 @pytest_asyncio.fixture
 async def client():
     transport = ASGITransport(app=app)
@@ -46,6 +48,7 @@ async def authenticated_user():
         yield user
 
         app.dependency_overrides.pop(get_current_user, None)
+        await cleanup_user_data(user.id)
 
 
 @pytest_asyncio.fixture
@@ -61,6 +64,8 @@ async def other_user():
         await session.refresh(user)
 
         yield user
+
+        await cleanup_user_data(user.id)
 
 
 @pytest_asyncio.fixture
@@ -856,3 +861,72 @@ async def test_manual_monitoring_check_flows_through_worker_and_persists_results
     finally:
         await pool.aclose()
         await client.delete(monitoring_path)
+
+@pytest.mark.asyncio
+async def test_updating_interval_reschedules_next_check(
+    client,
+    authenticated_user,
+    project,
+    service,
+):
+    create_response = await create_monitoring_config(
+        client,
+        project.id,
+        service.id,
+    )
+    assert create_response.status_code == 201
+
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(MonitoringConfig).where(
+                MonitoringConfig.service_id == service.id
+            )
+        )
+        config = result.scalar_one()
+        original_next_check_at = config.next_check_at
+
+    response = await client.patch(
+        f"/api/projects/{project.id}/services/{service.id}/monitoring",
+        json={"interval_seconds": 120},
+    )
+    assert response.status_code == 200
+
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(MonitoringConfig).where(
+                MonitoringConfig.service_id == service.id
+            )
+        )
+        updated = result.scalar_one()
+
+        assert updated.next_check_at > (
+            original_next_check_at + timedelta(seconds=100)
+        )
+
+
+async def cleanup_user_data(user_id):
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(Project).where(Project.owner_id == user_id)
+        )
+        projects = result.scalars().all()
+
+        for project in projects:
+            result = await session.execute(
+                select(Service).where(
+                    Service.project_id == project.id
+                )
+            )
+
+            for service in result.scalars().all():
+                await session.delete(service)
+
+            await session.flush()
+            await session.delete(project)
+
+        user = await session.get(User, user_id)
+
+        if user is not None:
+            await session.delete(user)
+
+        await session.commit()

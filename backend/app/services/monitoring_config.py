@@ -3,6 +3,7 @@ from uuid import UUID
 from app.models.monitoring_config import MonitoringConfig
 from app.repositories.monitoring_config import MonitoringConfigRepository
 
+from datetime import datetime, timedelta, timezone
 
 class MonitoringConfigService:
     def __init__(
@@ -52,12 +53,38 @@ class MonitoringConfigService:
             owner_id=owner_id,
         )
 
-    async def update_config(self, config: MonitoringConfig, **updates) -> MonitoringConfig:
+    async def update_config(
+        self,
+        config: MonitoringConfig,
+        **updates,
+    ) -> MonitoringConfig:
+        was_enabled = config.enabled
+
+        new_interval = updates.get("interval_seconds")
+        interval_changed = (
+            new_interval is not None
+            and new_interval != config.interval_seconds
+        )
+
+        reenabled = (
+            not was_enabled
+            and updates.get("enabled") is True
+        )
+
         for field, value in updates.items():
             if field == "url":
                 value = str(value)
 
             setattr(config, field, value)
+
+        now = datetime.now(timezone.utc)
+
+        if reenabled:
+            config.next_check_at = now
+        elif interval_changed:
+            config.next_check_at = now + timedelta(
+                seconds=config.interval_seconds,
+            )
 
         return config
 
