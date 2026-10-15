@@ -54,7 +54,7 @@ async def test_due_config_uses_deterministic_job_id_and_advances(
     monkeypatch,
     existing_job,
 ):
-    scheduled_for = datetime.now(timezone.utc) - timedelta(minutes=2)
+    scheduled_for = datetime.now(timezone.utc) - timedelta(minutes=20)
 
     config = {
         "id": CONFIG_ID,
@@ -87,7 +87,11 @@ async def test_due_config_uses_deterministic_job_id_and_advances(
         result=None if existing_job else "queued",
     )
 
+    before_processing = datetime.now(timezone.utc)
+
     processed = await scheduler.process_due_checks(pool)
+
+    after_processing = datetime.now(timezone.utc)
 
     expected_job_id = scheduler.build_scheduled_job_id(
         CONFIG_ID,
@@ -106,7 +110,14 @@ async def test_due_config_uses_deterministic_job_id_and_advances(
     assert len(advanced) == 1
     assert advanced[0]["config_id"] == CONFIG_ID
     assert advanced[0]["expected_next_check_at"] == scheduled_for
-    assert advanced[0]["next_check_at"] > datetime.now(timezone.utc)
+    next_check_at = advanced[0]["next_check_at"]
+    interval = timedelta(seconds=config["interval_seconds"])
+
+    assert (
+        before_processing + interval
+        <= next_check_at
+        <= after_processing + interval
+    )
 
 
 @pytest.mark.asyncio
@@ -141,4 +152,43 @@ async def test_redis_failure_does_not_advance_schedule(monkeypatch):
     )
 
     assert await scheduler.process_due_checks(pool) == 0
+    assert len(pool.calls) == 1
+@pytest.mark.asyncio
+async def test_stale_schedule_update_is_not_counted_as_advanced(
+    monkeypatch,
+):
+    scheduled_for = datetime.now(timezone.utc) - timedelta(minutes=5)
+
+    config = {
+        "id": CONFIG_ID,
+        "interval_seconds": 60,
+        "next_check_at": scheduled_for,
+    }
+
+    async def fake_get_due(*, now, limit):
+        return [config]
+
+    async def fake_advance(**kwargs):
+        assert kwargs["config_id"] == CONFIG_ID
+        assert kwargs["expected_next_check_at"] == scheduled_for
+        return False
+
+    monkeypatch.setattr(
+        scheduler,
+        "get_due_monitoring_configs",
+        fake_get_due,
+    )
+    monkeypatch.setattr(
+        scheduler,
+        "advance_monitoring_schedule",
+        fake_advance,
+    )
+
+    pool = FakeRedisPool(result="queued")
+
+    processed = await scheduler.process_due_checks(pool)
+
+    # The job may already be enqueued, but the stale schedule
+    # was not successfully advanced.
+    assert processed == 0
     assert len(pool.calls) == 1
