@@ -1026,3 +1026,145 @@ async def test_latest_monitor_check_for_unauthorized_service_returns_404(
     )
 
     assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_monitor_check_history_paginates_stably(
+    client,
+    authenticated_user,
+    project,
+    service,
+):
+    create_response = await create_monitoring_config(
+        client,
+        project.id,
+        service.id,
+    )
+    assert create_response.status_code == 201
+
+    config_id = uuid.UUID(create_response.json()["id"])
+    now = datetime.now(timezone.utc)
+
+    older_id = uuid.UUID(
+        "11111111-1111-4111-8111-111111111111"
+    )
+    newer_lower_id = uuid.UUID(
+        "22222222-2222-4222-8222-222222222222"
+    )
+    newer_higher_id = uuid.UUID(
+        "33333333-3333-4333-8333-333333333333"
+    )
+
+    async with AsyncSessionLocal() as session:
+        session.add_all(
+            [
+                MonitorCheck(
+                    id=older_id,
+                    monitoring_config_id=config_id,
+                    checked_at=now - timedelta(minutes=2),
+                    success=True,
+                    status_code=200,
+                    latency_ms=20,
+                    error=None,
+                ),
+                MonitorCheck(
+                    id=newer_lower_id,
+                    monitoring_config_id=config_id,
+                    checked_at=now - timedelta(minutes=1),
+                    success=False,
+                    status_code=503,
+                    latency_ms=80,
+                    error=None,
+                ),
+                MonitorCheck(
+                    id=newer_higher_id,
+                    monitoring_config_id=config_id,
+                    checked_at=now - timedelta(minutes=1),
+                    success=True,
+                    status_code=200,
+                    latency_ms=25,
+                    error=None,
+                ),
+            ]
+        )
+        await session.commit()
+
+    response = await client.get(
+        f"/api/projects/{project.id}/services/{service.id}"
+        "/monitoring/checks",
+        params={"limit": 2, "offset": 1},
+    )
+
+    assert response.status_code == 200
+
+    data = response.json()
+
+    assert data["total"] == 3
+    assert data["limit"] == 2
+    assert data["offset"] == 1
+
+    # Order is checked_at DESC, then id DESC.
+    # The first record is skipped by offset=1.
+    assert [
+        item["id"] for item in data["items"]
+    ] == [
+        str(newer_lower_id),
+        str(older_id),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_monitor_check_history_without_results_returns_empty_page(
+    client,
+    authenticated_user,
+    project,
+    service,
+):
+    create_response = await create_monitoring_config(
+        client,
+        project.id,
+        service.id,
+    )
+    assert create_response.status_code == 201
+
+    response = await client.get(
+        f"/api/projects/{project.id}/services/{service.id}"
+        "/monitoring/checks",
+    )
+
+    assert response.status_code == 200
+    assert response.json()["items"] == []
+    assert response.json()["total"] == 0
+    assert response.json()["limit"] == 20
+    assert response.json()["offset"] == 0
+
+
+@pytest.mark.asyncio
+async def test_monitor_check_history_unauthorized_returns_404(
+    client,
+    authenticated_user,
+    project,
+    other_user_service,
+):
+    response = await client.get(
+        f"/api/projects/{project.id}/services/"
+        f"{other_user_service.id}/monitoring/checks",
+    )
+
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_monitor_check_history_rejects_limit_over_100(
+    client,
+    authenticated_user,
+    project,
+    service,
+):
+    response = await client.get(
+        f"/api/projects/{project.id}/services/{service.id}"
+        "/monitoring/checks",
+        params={"limit": 101},
+    )
+
+    assert response.status_code == 422

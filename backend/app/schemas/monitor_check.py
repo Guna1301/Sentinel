@@ -15,3 +15,9 @@ class MonitorCheckResponse(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+class MonitorCheckHistoryResponse(BaseModel):
+    items: list[MonitorCheckResponse]
+    total: int
+    limit: int
+    offset: int
