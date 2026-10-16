@@ -18,7 +18,9 @@ from types import SimpleNamespace
 from app.core.queue import QueueClient, create_redis_pool
 from app.models.monitor_check import MonitorCheck
 
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
+
+from app.models.monitor_check import MonitorCheck
 
 @pytest_asyncio.fixture
 async def client():
@@ -930,3 +932,97 @@ async def cleanup_user_data(user_id):
             await session.delete(user)
 
         await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_get_latest_monitor_check_returns_newest_result(
+    client,
+    authenticated_user,
+    project,
+    service,
+):
+    create_response = await create_monitoring_config(
+        client,
+        project.id,
+        service.id,
+    )
+    assert create_response.status_code == 201
+
+    config_id = uuid.UUID(create_response.json()["id"])
+    now = datetime.now(timezone.utc)
+
+    async with AsyncSessionLocal() as session:
+        session.add_all(
+            [
+                MonitorCheck(
+                    monitoring_config_id=config_id,
+                    checked_at=now - timedelta(minutes=2),
+                    success=True,
+                    status_code=200,
+                    latency_ms=20,
+                    error=None,
+                ),
+                MonitorCheck(
+                    monitoring_config_id=config_id,
+                    checked_at=now - timedelta(minutes=1),
+                    success=False,
+                    status_code=503,
+                    latency_ms=80,
+                    error=None,
+                ),
+            ]
+        )
+        await session.commit()
+
+    response = await client.get(
+        f"/api/projects/{project.id}/services/{service.id}"
+        "/monitoring/checks/latest"
+    )
+
+    assert response.status_code == 200
+
+    data = response.json()
+    assert data["monitoring_config_id"] == str(config_id)
+    assert data["checked_at"] == (
+        now - timedelta(minutes=1)
+    ).isoformat().replace("+00:00", "Z")
+    assert data["success"] is False
+    assert data["status_code"] == 503
+    assert data["latency_ms"] == 80
+
+
+@pytest.mark.asyncio
+async def test_latest_monitor_check_without_results_returns_404(
+    client,
+    authenticated_user,
+    project,
+    service,
+):
+    create_response = await create_monitoring_config(
+        client,
+        project.id,
+        service.id,
+    )
+    assert create_response.status_code == 201
+
+    response = await client.get(
+        f"/api/projects/{project.id}/services/{service.id}"
+        "/monitoring/checks/latest"
+    )
+
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_latest_monitor_check_for_unauthorized_service_returns_404(
+    client,
+    authenticated_user,
+    project,
+    other_user_service,
+):
+    response = await client.get(
+        f"/api/projects/{project.id}/services/"
+        f"{other_user_service.id}/monitoring/checks/latest"
+    )
+
+    assert response.status_code == 404
