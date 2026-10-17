@@ -80,3 +80,9 @@ class MonitoringConfig(Base):
         server_default=func.now(),
         nullable=False,
     )
+
+    incidents = relationship(
+        "Incident",
+        back_populates="monitoring_config",
+        cascade="all, delete-orphan",
+    )

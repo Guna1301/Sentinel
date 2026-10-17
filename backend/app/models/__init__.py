@@ -5,6 +5,7 @@ from app.models.project import Project
 from app.models.service import Service
 from app.models.monitoring_config import MonitoringConfig
 from app.models.monitor_check import MonitorCheck
+from app.models.incident import Incident
 
 
 __all__ = [
@@ -15,4 +16,5 @@ __all__ = [
     "Service",
     "MonitoringConfig",
     "MonitorCheck",
+    "Incident",
 ]
