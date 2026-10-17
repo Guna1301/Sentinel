@@ -5,6 +5,7 @@ import pytest
 
 import jobs.monitoring as monitoring_job
 from clients.http import HttpCheckResult
+from services.incidents import IncidentDecision
 
 
 CONFIG_ID = UUID("11111111-1111-4111-8111-111111111111")
@@ -57,20 +58,28 @@ async def test_check_monitor_persists_http_result(
         assert config_id == CONFIG_ID
         return CONFIG
 
-    async def fake_create_check(**kwargs):
-        persisted_checks.append(kwargs)
-        return CHECK_ID
-
     monkeypatch.setattr(
         monitoring_job,
         "get_monitoring_config",
         fake_get_config,
     )
+
+    async def fake_persist(**kwargs):
+        persisted_checks.append(kwargs)
+        return (
+            CHECK_ID,
+            IncidentDecision(
+                action="none",
+                reason="test_no_transition",
+            ),
+        )
+
     monkeypatch.setattr(
         monitoring_job,
-        "create_monitor_check",
-        fake_create_check,
+        "persist_check_and_evaluate_incident",
+        fake_persist,
     )
+
 
     http_client = FakeHttpCheckClient(http_result)
 
@@ -83,6 +92,7 @@ async def test_check_monitor_persists_http_result(
         "status": "completed",
         "check_id": str(CHECK_ID),
         "success": http_result.success,
+        "incident_action": "none",
     }
 
     assert http_client.calls == [
@@ -97,13 +107,15 @@ async def test_check_monitor_persists_http_result(
 
     check = persisted_checks[0]
 
-    assert check["monitoring_config_id"] == CONFIG_ID
-    assert isinstance(check["checked_at"], datetime)
-    assert check["checked_at"].tzinfo is not None
-    assert check["success"] is http_result.success
-    assert check["status_code"] == http_result.status_code
-    assert check["latency_ms"] == http_result.latency_ms
-    assert check["error"] == http_result.error
+    assert persisted_checks == [
+        {
+            "monitoring_config_id": CONFIG_ID,
+            "success": http_result.success,
+            "status_code": http_result.status_code,
+            "latency_ms": http_result.latency_ms,
+            "error": http_result.error,
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -133,7 +145,7 @@ async def test_check_monitor_skips_missing_or_disabled_config(
     )
     monkeypatch.setattr(
         monitoring_job,
-        "create_monitor_check",
+        "persist_check_and_evaluate_incident",
         unexpected_persist,
     )
 

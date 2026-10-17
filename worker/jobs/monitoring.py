@@ -1,11 +1,9 @@
-from datetime import datetime, timezone
+
 from typing import Any
 from uuid import UUID
 
-from db.monitoring import (
-    create_monitor_check,
-    get_monitoring_config,
-)
+from db.incidents import persist_check_and_evaluate_incident
+from db.monitoring import get_monitoring_config
 
 
 async def check_monitor(
@@ -28,9 +26,6 @@ async def check_monitor(
             "reason": "config_disabled",
         }
 
-    # Record when this check begins.
-    checked_at = datetime.now(timezone.utc)
-
     http_client = ctx["http_check_client"]
 
     result = await http_client.check(
@@ -39,17 +34,25 @@ async def check_monitor(
         timeout_seconds=config["timeout_seconds"],
     )
 
-    check_id = await create_monitor_check(
+    persistence = await persist_check_and_evaluate_incident(
         monitoring_config_id=config["id"],
-        checked_at=checked_at,
         success=result.success,
         status_code=result.status_code,
         latency_ms=result.latency_ms,
         error=result.error,
     )
 
+    if persistence is None:
+        return {
+            "status": "skipped",
+            "reason": "config_not_found",
+        }
+
+    check_id, decision = persistence
+
     return {
         "status": "completed",
         "check_id": str(check_id),
         "success": result.success,
+        "incident_action": decision.action,
     }

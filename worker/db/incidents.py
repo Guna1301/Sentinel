@@ -1,5 +1,6 @@
 
 import uuid
+from datetime import datetime, timezone
 from uuid import UUID
 
 from sqlalchemy import insert, select, update
@@ -21,10 +22,8 @@ async def evaluate_incident_in_transaction(
     """
     Evaluate recent checks and apply an incident transition.
 
-    The caller must already have locked the corresponding
-    monitoring_configs row with SELECT ... FOR UPDATE.
-
-    This function participates in the caller's transaction.
+    The caller must hold a FOR UPDATE lock on the associated
+    monitoring_configs row until the transaction completes.
     """
     open_result = await session.execute(
         select(
@@ -63,6 +62,14 @@ async def evaluate_incident_in_transaction(
     )
 
     if decision.action == "open":
+        if (
+            decision.trigger_check_id is None
+            or decision.occurred_at is None
+        ):
+            raise RuntimeError(
+                "Incident-opening decision is missing required data"
+            )
+
         incident_id = uuid.uuid4()
 
         await session.execute(
@@ -85,6 +92,14 @@ async def evaluate_incident_in_transaction(
         )
 
     if decision.action == "resolve":
+        if (
+            decision.incident_id is None
+            or decision.occurred_at is None
+        ):
+            raise RuntimeError(
+                "Incident-resolution decision is missing required data"
+            )
+
         result = await session.execute(
             update(incidents)
             .where(
@@ -100,41 +115,63 @@ async def evaluate_incident_in_transaction(
         )
 
         if result.rowcount != 1:
-            return IncidentDecision(
-                action="none",
-                reason="incident_already_resolved",
-                incident_id=decision.incident_id,
+            raise RuntimeError(
+                "Open incident changed during a locked transition"
             )
 
     return decision
 
 
-async def evaluate_incident_for_config(
+async def persist_check_and_evaluate_incident(
+    *,
     monitoring_config_id: UUID,
-) -> IncidentDecision:
+    success: bool,
+    status_code: int | None,
+    latency_ms: int,
+    error: str | None,
+) -> tuple[UUID, IncidentDecision] | None:
     """
-    Safely evaluate a persisted configuration's current check state.
+    Persist one check and apply its incident transition atomically.
 
-    M8.2 provides this standalone evaluation operation.
-    M8.3 will integrate it with check creation in one transaction.
+    Returns None if the monitoring configuration no longer exists.
     """
     async with AsyncSessionLocal() as session:
         async with session.begin():
             config_result = await session.execute(
                 select(monitoring_configs.c.id)
                 .where(
-                    monitoring_configs.c.id == monitoring_config_id
+                    monitoring_configs.c.id == monitoring_config_id,
                 )
                 .with_for_update()
             )
 
             if config_result.scalar_one_or_none() is None:
-                return IncidentDecision(
-                    action="none",
-                    reason="configuration_not_found",
-                )
+                return None
 
-            return await evaluate_incident_in_transaction(
+            check_id = uuid.uuid4()
+
+            # Assign the timestamp after obtaining the configuration
+            # lock, so incident evaluation follows serialized results.
+            checked_at = datetime.now(timezone.utc)
+
+            await session.execute(
+                insert(monitor_checks).values(
+                    id=check_id,
+                    monitoring_config_id=monitoring_config_id,
+                    checked_at=checked_at,
+                    success=success,
+                    status_code=status_code,
+                    latency_ms=latency_ms,
+                    error=error,
+                )
+            )
+
+            # Ensure this transaction can see the new check.
+            await session.flush()
+
+            decision = await evaluate_incident_in_transaction(
                 session,
                 monitoring_config_id,
             )
+
+            return check_id, decision
