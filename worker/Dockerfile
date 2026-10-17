@@ -17,5 +17,6 @@ COPY jobs ./jobs
 COPY db ./db
 COPY clients ./clients
 COPY scheduler.py .
+COPY services ./services
 
 CMD ["arq", "worker.WorkerSettings"]
