@@ -13,7 +13,7 @@ from app.api.projects import router as projects_router
 from app.api.services import router as services_router
 from app.api.monitoring_config import router as monitoring_config_router
 from app.api.monitor_checks import router as monitor_checks_router
-
+from app.api.incidents import router as incidents_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -41,6 +41,7 @@ app.include_router(projects_router)
 app.include_router(services_router)
 app.include_router(monitoring_config_router)
 app.include_router(monitor_checks_router)
+app.include_router(incidents_router)
 
 @app.get("/health")
 async def health_check():

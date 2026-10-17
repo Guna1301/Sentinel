@@ -12,6 +12,7 @@ from app.models.monitoring_config import MonitoringConfig
 from app.models.project import Project
 from app.models.service import Service
 from app.models.user import User
+from app.models.incident import Incident
 
 from types import SimpleNamespace
 
@@ -1164,6 +1165,122 @@ async def test_monitor_check_history_rejects_limit_over_100(
     response = await client.get(
         f"/api/projects/{project.id}/services/{service.id}"
         "/monitoring/checks",
+        params={"limit": 101},
+    )
+
+    assert response.status_code == 422
+
+
+
+@pytest.mark.asyncio
+async def test_incident_history_is_paginated_and_newest_first(
+    client,
+    authenticated_user,
+    project,
+    service,
+):
+    response = await create_monitoring_config(
+        client,
+        project.id,
+        service.id,
+    )
+    assert response.status_code == 201
+
+    config_id = uuid.UUID(response.json()["id"])
+    now = datetime.now(timezone.utc)
+
+    older_id = uuid.UUID("11111111-1111-4111-8111-111111111111")
+    newer_id = uuid.UUID("22222222-2222-4222-8222-222222222222")
+
+    async with AsyncSessionLocal() as session:
+        session.add_all(
+            [
+                Incident(
+                    id=older_id,
+                    monitoring_config_id=config_id,
+                    status="resolved",
+                    opened_at=now - timedelta(minutes=5),
+                    resolved_at=now - timedelta(minutes=4),
+                ),
+                Incident(
+                    id=newer_id,
+                    monitoring_config_id=config_id,
+                    status="open",
+                    opened_at=now - timedelta(minutes=1),
+                    resolved_at=None,
+                ),
+            ]
+        )
+        await session.commit()
+
+    response = await client.get(
+        f"/api/projects/{project.id}/services/{service.id}"
+        "/monitoring/incidents",
+        params={"limit": 1, "offset": 0},
+    )
+
+    assert response.status_code == 200
+
+    data = response.json()
+    assert data["total"] == 2
+    assert data["limit"] == 1
+    assert data["offset"] == 0
+    assert len(data["items"]) == 1
+    assert data["items"][0]["id"] == str(newer_id)
+    assert data["items"][0]["status"] == "open"
+
+
+@pytest.mark.asyncio
+async def test_incident_history_without_incidents_returns_empty_page(
+    client,
+    authenticated_user,
+    project,
+    service,
+):
+    response = await create_monitoring_config(
+        client,
+        project.id,
+        service.id,
+    )
+    assert response.status_code == 201
+
+    response = await client.get(
+        f"/api/projects/{project.id}/services/{service.id}"
+        "/monitoring/incidents",
+    )
+
+    assert response.status_code == 200
+    assert response.json()["items"] == []
+    assert response.json()["total"] == 0
+    assert response.json()["limit"] == 20
+    assert response.json()["offset"] == 0
+
+
+@pytest.mark.asyncio
+async def test_incident_history_for_unauthorized_service_returns_404(
+    client,
+    authenticated_user,
+    project,
+    other_user_service,
+):
+    response = await client.get(
+        f"/api/projects/{project.id}/services/"
+        f"{other_user_service.id}/monitoring/incidents",
+    )
+
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_incident_history_rejects_limit_over_100(
+    client,
+    authenticated_user,
+    project,
+    service,
+):
+    response = await client.get(
+        f"/api/projects/{project.id}/services/{service.id}"
+        "/monitoring/incidents",
         params={"limit": 101},
     )
 
