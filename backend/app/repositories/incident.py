@@ -45,3 +45,17 @@ class IncidentRepository:
         )
 
         return result.scalar_one()
+
+    async def get_by_id_for_config(
+        self,
+        incident_id: UUID,
+        monitoring_config_id: UUID,
+    ) -> Incident | None:
+        result = await self._session.execute(
+            select(Incident).where(
+                Incident.id == incident_id,
+                Incident.monitoring_config_id == monitoring_config_id,
+            )
+        )
+
+        return result.scalar_one_or_none()

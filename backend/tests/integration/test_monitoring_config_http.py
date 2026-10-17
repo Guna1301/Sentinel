@@ -1285,3 +1285,85 @@ async def test_incident_history_rejects_limit_over_100(
     )
 
     assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_get_incident_detail_returns_incident(
+    client,
+    authenticated_user,
+    project,
+    service,
+):
+    config_response = await create_monitoring_config(
+        client,
+        project.id,
+        service.id,
+    )
+    assert config_response.status_code == 201
+
+    config_id = uuid.UUID(config_response.json()["id"])
+    incident_id = uuid.uuid4()
+    opened_at = datetime.now(timezone.utc)
+
+    async with AsyncSessionLocal() as session:
+        session.add(
+            Incident(
+                id=incident_id,
+                monitoring_config_id=config_id,
+                status="open",
+                opened_at=opened_at,
+                resolved_at=None,
+            )
+        )
+        await session.commit()
+
+    response = await client.get(
+        f"/api/projects/{project.id}/services/{service.id}"
+        f"/monitoring/incidents/{incident_id}"
+    )
+
+    assert response.status_code == 200
+
+    data = response.json()
+    assert data["id"] == str(incident_id)
+    assert data["monitoring_config_id"] == str(config_id)
+    assert data["status"] == "open"
+    assert data["resolved_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_get_missing_incident_returns_404(
+    client,
+    authenticated_user,
+    project,
+    service,
+):
+    config_response = await create_monitoring_config(
+        client,
+        project.id,
+        service.id,
+    )
+    assert config_response.status_code == 201
+
+    response = await client.get(
+        f"/api/projects/{project.id}/services/{service.id}"
+        f"/monitoring/incidents/{uuid.uuid4()}"
+    )
+
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_get_incident_for_unauthorized_service_returns_404(
+    client,
+    authenticated_user,
+    project,
+    other_user_service,
+):
+    response = await client.get(
+        f"/api/projects/{project.id}/services/"
+        f"{other_user_service.id}/monitoring/incidents/"
+        f"{uuid.uuid4()}"
+    )
+
+    assert response.status_code == 404

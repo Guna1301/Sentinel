@@ -50,3 +50,28 @@ class IncidentService:
         )
 
         return items, total
+
+    async def get_detail_for_owner(
+        self,
+        *,
+        project_id: UUID,
+        service_id: UUID,
+        owner_id: UUID,
+        incident_id: UUID,
+    ) -> Incident | None:
+        config = (
+            await self._monitoring_config_repository
+            .get_by_service_for_owner(
+                service_id=service_id,
+                project_id=project_id,
+                owner_id=owner_id,
+            )
+        )
+
+        if config is None:
+            return None
+
+        return await self._incident_repository.get_by_id_for_config(
+            incident_id=incident_id,
+            monitoring_config_id=config.id,
+        )

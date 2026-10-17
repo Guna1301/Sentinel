@@ -9,7 +9,10 @@ from app.repositories.incident import IncidentRepository
 from app.repositories.monitoring_config import (
     MonitoringConfigRepository,
 )
-from app.schemas.incident import IncidentHistoryResponse
+from app.schemas.incident import (
+    IncidentHistoryResponse,
+    IncidentResponse,
+)
 from app.services.incident import IncidentService
 
 
@@ -69,3 +72,31 @@ async def list_incidents(
         limit=limit,
         offset=offset,
     )
+
+@router.get(
+    "/{incident_id}",
+    response_model=IncidentResponse,
+)
+async def get_incident_detail(
+    project_id: UUID,
+    service_id: UUID,
+    incident_id: UUID,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+):
+    service = get_incident_service(session)
+
+    incident = await service.get_detail_for_owner(
+        project_id=project_id,
+        service_id=service_id,
+        owner_id=current_user.id,
+        incident_id=incident_id,
+    )
+
+    if incident is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Incident not found",
+        )
+
+    return incident
